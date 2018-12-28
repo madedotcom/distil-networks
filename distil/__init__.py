@@ -89,6 +89,9 @@ def identify_scope_changes(existing, desired, acl_id):
     remove_rule = []
     destroy_scope = []
 
+    # Start off by assuming that all of the existing rules for this ACL
+    # are no longer needed. If we find them in the desired specs, we'll
+    # remove them from this list.
     orphaned_scopes = existing.find_by_acl(acl_id)
 
     for spec in desired:
@@ -101,9 +104,15 @@ def identify_scope_changes(existing, desired, acl_id):
 
         if acl_id in scope.access_control_list_ids:
             orphaned_scopes.remove(scope)
+
             continue
 
         add_rule.append(scope.id)
+
+    # What's remaining in orphans is now unused associations.
+    # IF the scope has several rules attached, we need to keep it
+    # but if this is the only rule attached, we can delete the scope
+    # UNLESS it's the magic 'all paths' scope.
 
     for scope in orphaned_scopes:
         if len(scope.access_control_list_ids) > 1:
@@ -194,6 +203,11 @@ class Client:
                              "access_control_lists/{0}/rules/batch_destroy",
                              {"ids": rules}, acl_id)
 
+    def get_domains(self):
+        resp = self._get_uri("platform/domains")
+
+        return {domain['name']: domain['id'] for domain in resp['domains']}
+
     def get_scopes(self):
         resp = self._get_uri("rule_scopes")
 
@@ -205,3 +219,36 @@ class Client:
             domain=scope['domain'],
             access_control_list_ids=scope['access_control_list_ids'])
                                 for scope in resp['rule_scopes']))
+
+    def create_scope(self, spec, acl_id):
+        domains = self.get_domains()
+
+        if spec.domain not in domains:
+            raise KeyError(
+                "Unrecognised domain {}. Domains must be configured in the portal."
+                % spec.domain)
+
+        return self._post_uri(
+            "rule_scopes", {
+                "type": "default" if spec.match == "all" else "path",
+                "match": "default" if spec.match == "all" else spec.match[1],
+                "lua_pattern_enabled": spec.match[0] == "pattern",
+                "access_control_list_id": acl_id
+            },
+            domain_id=domains[spec.domain])
+
+    def disassociate_acl_from_scopes(self, acl_id, scope_ids):
+        if not scope_ids:
+            return
+        self._req_uri("DELETE", "access_control_lists/{0}/rule_scopes/batch_destroy", {
+            "ids": scope_ids,
+        }, acl_id)
+
+    def associate_acl_to_scopes(self, acl_id, scope_ids):
+        if not scope_ids:
+            return
+        self._post_uri("access_control_lists/{0}/rule_scopes/batch_create",
+                       {"ids": scope_ids}, acl_id)
+
+    def delete_scope(self, scope_id):
+        self._delete_uri("rule_scopes/{0}", scope_id)
