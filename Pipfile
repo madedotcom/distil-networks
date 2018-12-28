@@ -13,6 +13,8 @@ pytest = "*"
 requests = "*"
 py-distil-networks = {editable = true,path = "."}
 ansible = "==2.7.1"
+jmespath = "*"
+cachecontrol = "*"
 
 [requires]
 python_version = "3.7"
