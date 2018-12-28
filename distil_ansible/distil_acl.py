@@ -42,7 +42,7 @@ EXAMPLES = '''
     account: abc-123
     rules:
         - type: ip
-          name: office
+          description: office
           value: 172.31.0.1
 
 # Create a temporary exemption for an IP range
@@ -54,7 +54,7 @@ EXAMPLES = '''
       description: "Need to have access for the next couple of weeks so they can ransack our data and break our website."
       rules:
           - type: ip
-            name: $PARTNER
+            description: $PARTNER
             value: 172.17.0.0/24
 
 # Delete an ACL
@@ -127,8 +127,6 @@ def parse_rules(module):
 
     return parsed
 
-
-
 def get_changes(module, acl):
     client = distil.Client(module.params["token"], module.params["account"])
     existing = client.get_rules(acl.id)
@@ -142,11 +140,10 @@ def modify_acl(module):
     acl = client.get_acl_by_name(module.params["name"])[0]
 
     changes = get_changes(module, acl)
-    if not (changes["to_delete"] or changes["to_create"] or changes["to_update"]):
+    if not (changes["to_delete"] or changes["to_create"]):
         module.exit_json(changed=False)
-    client.create_rules(acl.id, changes["to_create"])
-    client.modify_rules(acl.id, changes["to_update"])
     client.delete_rules(acl.id, changes["to_delete"])
+    client.create_rules(acl.id, changes["to_create"])
     module.exit_json(changed=True, changes=changes)
 
 def main():

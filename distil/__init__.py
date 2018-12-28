@@ -15,6 +15,41 @@ AccessRule = namedtuple('_acl_rule', [
 RuleSpec = namedtuple('_acl_rule_spec',
                       ["type", "list", "name", "value", "expires", "note"])
 
+RuleScope = namedtuple('_rule_scope', [
+    'id', 'type', 'match', 'lua_pattern_enabled', 'domain',
+    'access_control_list_ids'
+])
+
+ScopeSpec = namedtuple('_rule_scope_spec', ['domain', 'match'])
+
+
+def matches(spec, scope):
+    if spec.match == 'all':
+        return (scope.match == 'default' and scope.type == 'default'
+                and scope.domain == spec.domain)
+
+    match_type, match = spec.match
+
+    if match_type == 'path':
+        return (scope.match == match and scope.type == 'path'
+                and scope.lua_pattern_enabled == False)
+
+    if match_type == 'pattern':
+        return (scope.match == match and scope.type == 'path'
+                and scope.lua_pattern_enabled == True)
+
+
+class ScopeCollection(list):
+    def find(self, spec):
+        for scope in self:
+            if matches(spec, scope):
+                return scope
+
+    def find_by_acl(self, acl_id):
+        return [
+            scope for scope in self if acl_id in scope.access_control_list_ids
+        ]
+
 
 def extract_spec(rule):
     return RuleSpec(rule.type, rule.list, rule.name, rule.value, rule.expires,
@@ -36,22 +71,53 @@ def split_modifications(missing, outdated):
 
 def identify_rule_changes(existing, desired):
     ids = {extract_spec(r): r.id for r in existing}
-    existing_names = {r.name: r.id for r in existing}
     existing = set(ids.keys())
     desired = set(desired)
+
     missing = desired - existing
     outdated = existing - desired
 
-    updated = {rule for rule in missing if rule.name in existing_names}
-    updated_names = [r.name for r in updated]
+    return {
+        "to_delete": [ids[r] for r in outdated],
+        "to_create": list(missing),
+    }
 
-    update, create, delete = split_modifications(missing, outdated)
+
+def identify_scope_changes(existing, desired, acl_id):
+    create_scope = []
+    add_rule = []
+    remove_rule = []
+    destroy_scope = []
+
+    orphaned_scopes = existing.find_by_acl(acl_id)
+
+    for spec in desired:
+        scope = existing.find(spec)
+
+        if not scope:
+            create_scope.append(spec)
+
+            continue
+
+        if acl_id in scope.access_control_list_ids:
+            orphaned_scopes.remove(scope)
+            continue
+
+        add_rule.append(scope.id)
+
+    for scope in orphaned_scopes:
+        if len(scope.access_control_list_ids) > 1:
+            remove_rule.append(scope.id)
+        elif scope.type == 'default':
+            remove_rule.append(scope.id)
+        else:
+            destroy_scope.append(scope.id)
 
     return {
-        "to_delete": [ids[r] for r in (delete) if r.name not in updated_names],
-        "to_create": list(create),
-        "to_update": {existing_names[r.name]: r
-                      for r in update}
+        'to_create': create_scope,
+        'to_destroy': destroy_scope,
+        'add_to': add_rule,
+        'remove_from': remove_rule
     }
 
 
@@ -70,12 +136,10 @@ class Client:
 
         if body:
             import json
-            print(json.dumps(body))
             kw["json"] = body
 
         resp = requests.request(method, API_ROOT + resource.format(*args),
                                 **kw)
-        print(resp.text)
         resp.raise_for_status()
         try:
             return resp.json()
@@ -122,19 +186,6 @@ class Client:
                               {"rules": [rule._asdict() for rule in rules]},
                               acl_id)
 
-    def modify_rules(self, acl_id, rules):
-        if not rules:
-            return
-        modifications = []
-
-        for id, rule in rules.items():
-            data = rule._asdict()
-            data["id"] = id
-            modifications.append(data)
-
-        return self.post_uri("access_control_lists/{0}/rules/batch_update",
-                             {"rules": modifications}, acl_id)
-
     def delete_rules(self, acl_id, rules):
         if not rules:
             return
@@ -142,3 +193,15 @@ class Client:
         return self._req_uri("DELETE",
                              "access_control_lists/{0}/rules/batch_destroy",
                              {"ids": rules}, acl_id)
+
+    def get_scopes(self):
+        resp = self._get_uri("rule_scopes")
+
+        return ScopeCollection((RuleScope(
+            id=scope['id'],
+            type=scope['type'],
+            match=scope['match'],
+            lua_pattern_enabled=scope['lua_pattern_enabled'],
+            domain=scope['domain'],
+            access_control_list_ids=scope['access_control_list_ids'])
+                                for scope in resp['rule_scopes']))
