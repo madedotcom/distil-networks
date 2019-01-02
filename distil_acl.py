@@ -237,7 +237,7 @@ class Client:
             returned_page = meta.get("page")
             total_pages = meta.get("total_pages")
 
-            if not returned_page:
+            if not returned_page or total_pages == 0:
                 break
 
             is_last_page = returned_page == total_pages
