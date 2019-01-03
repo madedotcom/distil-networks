@@ -460,7 +460,7 @@ def parse_rules(module):
                 name=rule.get("name"),
                 value=rule.get("value"),
                 expires=rule.get("expires"),
-                note=rule.get("description")))
+                note=rule.get("description") or ""))
 
     return parsed
 
